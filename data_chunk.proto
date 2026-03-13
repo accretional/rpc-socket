@@ -1,0 +1,166 @@
+syntax = "proto3";
+
+package webrtc;
+
+// RFC 4960 — Stream Control Transmission Protocol (SCTP)
+// https://www.rfc-editor.org/rfc/rfc4960
+//
+// Encoding conventions (same as dcep.proto):
+//
+//   Semantic fixed-length fields  → exported enum, sentinel one past
+//                                   the wire range to force wide encoding
+//   Non-semantic fixed-length     → smallest uint that covers the wire
+//                                   width; proto3 has no uint8 or uint16,
+//                                   so uint32 is the smallest available
+//                                   type for fields up to 4 bytes wide.
+//                                   Raw bit regions with no semantic
+//                                   members use bytes for round-trip
+//                                   fidelity.
+//   Semantic bit flags            → individual bools named after the
+//                                   flag's meaning, or an enum when the
+//                                   values are mutually exclusive
+//   Length / framing fields       → nested wrapper message containing
+//                                   only the length, optional/ignorable
+//                                   by gRPC consumers since protobuf
+//                                   handles framing independently
+//   Field numbering               → mirrors the RFC wire layout order
+
+// ───────────────────────────────────────────────────────────────
+// Enums
+// ───────────────────────────────────────────────────────────────
+
+// Section 3.2 — Chunk Type
+// Wire: 1 byte unsigned (0x00–0xfe)
+enum SCTPChunkType {
+  SCTP_CHUNK_DATA              = 0;   // Payload Data
+  SCTP_CHUNK_INIT              = 1;   // Initiation
+  SCTP_CHUNK_INIT_ACK          = 2;   // Initiation Acknowledgement
+  SCTP_CHUNK_SACK              = 3;   // Selective Acknowledgement
+  SCTP_CHUNK_HEARTBEAT         = 4;   // Heartbeat Request
+  SCTP_CHUNK_HEARTBEAT_ACK     = 5;   // Heartbeat Acknowledgement
+  SCTP_CHUNK_ABORT             = 6;   // Abort
+  SCTP_CHUNK_SHUTDOWN          = 7;   // Shutdown
+  SCTP_CHUNK_SHUTDOWN_ACK      = 8;   // Shutdown Acknowledgement
+  SCTP_CHUNK_ERROR             = 9;   // Operation Error
+  SCTP_CHUNK_COOKIE_ECHO       = 10;  // Cookie Echo
+  SCTP_CHUNK_COOKIE_ACK        = 11;  // Cookie Acknowledgement
+  SCTP_CHUNK_ECNE              = 12;  // ECN Echo
+  SCTP_CHUNK_CWR               = 13;  // Congestion Window Reduced
+  SCTP_CHUNK_SHUTDOWN_COMPLETE = 14;  // Shutdown Complete
+  SCTP_CHUNK_TYPE_SENTINEL     = 256;
+}
+
+// ───────────────────────────────────────────────────────────────
+// Common structures
+// ───────────────────────────────────────────────────────────────
+
+// Section 3.1 — SCTP Common Header
+//
+//  0                   1                   2                   3
+//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |     Source Port Number        |     Destination Port Number   |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                      Verification Tag                         |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                           Checksum                            |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message SCTPCommonHeader {
+  // Wire: 2 bytes unsigned. Port 0 MUST NOT be used.
+  // uint32 because proto3 has no uint16.
+  uint32 source_port = 1;
+
+  // Wire: 2 bytes unsigned. Port 0 MUST NOT be used.
+  uint32 destination_port = 2;
+
+  // Wire: 4 bytes unsigned. Set to peer's Initiate Tag; 0 for INIT.
+  uint32 verification_tag = 3;
+
+  // Wire: 4 bytes unsigned. CRC32c of the entire SCTP packet.
+  uint32 checksum = 4;
+}
+
+// Section 3.2 — Chunk Length
+// Wraps the 2-byte chunk length field. Optional/ignorable by gRPC
+// consumers; a bridge serializer can recompute from message contents.
+// Includes Type, Flags, Length, and Value fields but NOT trailing padding.
+message ChunkLength {
+  uint32 length = 1;
+}
+
+// ───────────────────────────────────────────────────────────────
+// DATA chunk (Section 3.3.1)
+// ───────────────────────────────────────────────────────────────
+
+// Section 3.3.1 — Payload Data (DATA) (0)
+//
+//  0                   1                   2                   3
+//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |   Type = 0    | Reserved|U|B|E|    Length                     |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                              TSN                              |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |      Stream Identifier S      |   Stream Sequence Number n   |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                  Payload Protocol Identifier                  |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// \                                                               \
+// /                 User Data (seq n of Stream S)                 /
+// \                                                               \
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message DataChunk {
+  // Wire: 1 byte — must be SCTP_CHUNK_DATA (0)
+  SCTPChunkType chunk_type = 1;
+
+  // --- Chunk Flags byte: [Reserved(5)][U(1)][B(1)][E(1)] ---
+
+  // Wire: 5 bits — reserved, set to all 0 on transmit, ignored on
+  // receipt. Stored as raw bytes for wire round-trip fidelity; a
+  // future RFC may assign meaning to these bits.
+  bytes reserved = 2;
+
+  // Wire: 1 bit — (U)nordered. If true, this is an unordered DATA
+  // chunk and the receiver MUST ignore stream_sequence_number.
+  bool unordered = 3;
+
+  // Wire: 1 bit — (B)eginning fragment. If true, first fragment of
+  // a user message.
+  bool beginning = 4;
+
+  // Wire: 1 bit — (E)nding fragment. If true, last fragment of a
+  // user message. beginning=true ending=true → unfragmented message.
+  bool ending = 5;
+
+  // --- end flags byte ---
+
+  // Wire: 2 bytes unsigned — total chunk size in bytes including header,
+  // excluding trailing padding. Optional; gRPC consumers may ignore,
+  // bridge serializers recompute from |user_data| as (16 + len(user_data)).
+  ChunkLength chunk_length = 6;
+
+  // Wire: 4 bytes unsigned — Transmission Sequence Number.
+  // Valid range 0 to 2^32-1, wraps to 0.
+  uint32 tsn = 7;
+
+  // Wire: 2 bytes unsigned — identifies which stream the data belongs to.
+  // uint32 because proto3 has no uint16.
+  uint32 stream_identifier = 8;
+
+  // Wire: 2 bytes unsigned — sequence number within the stream.
+  // Valid range 0 to 65535. Ignored when unordered is true.
+  // uint32 because proto3 has no uint16.
+  uint32 stream_sequence_number = 9;
+
+  // Wire: 4 bytes unsigned — application-level protocol identifier.
+  // Opaque to SCTP; passed through without byte-order conversion.
+  // Value 0 means unspecified.
+  uint32 payload_protocol_identifier = 10;
+
+  // Wire: variable length — the actual user payload.
+  // On wire, sender pads to 4-byte boundary with zeros; padding is
+  // NOT included in chunk_length. Here it is the raw unpadded payload.
+  bytes user_data = 11;
+}
