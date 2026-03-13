@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package webrtc;
+
+// RFC 8832 — WebRTC Data Channel Establishment Protocol (DCEP)
+// https://www.rfc-editor.org/rfc/rfc8832.html
+//
+// Encoding conventions used across the webrtc package:
+//
+//   Semantic fixed-length fields  → exported enum, sentinel one past
+//                                   the wire range to force wide encoding
+//   Non-semantic fixed-length     → smallest uint that covers the wire
+//                                   width; proto3 has no uint8 or uint16,
+//                                   so uint32 is the smallest available
+//                                   type for fields up to 4 bytes wide
+//   Length-prefixed variable data → nested wrapper message containing
+//                                   only the length field, so the wire
+//                                   length is optional/ignorable; the
+//                                   actual data lives as a top-level
+//                                   string on the parent message
+//   Field numbering               → mirrors the RFC wire layout order
+//                                   exactly, so the proto definition
+//                                   reads as a 1:1 map of the spec
+
+// ───────────────────────────────────────────────────────────────
+// Enums
+// ───────────────────────────────────────────────────────────────
+
+// Section 8.2.1 — Message Type registry
+// Wire: 1 byte unsigned (0x00–0xff)
+enum DCEPMessageType {
+  _DCEP_MSG_0          = 0; // proto3 required zero value
+  _DCEP_MSG_1          = 1;
+  DATA_CHANNEL_ACK     = 2; // 0x02
+  DATA_CHANNEL_OPEN    = 3; // 0x03
+  DCEP_MSG_SENTINEL    = 256;
+}
+
+// Section 8.2.2 — Channel Type registry
+// Wire: 1 byte unsigned (0x00–0xff)
+// Bit 7 (0x80) signals unordered delivery.
+enum DCEPChannelType {
+  DATA_CHANNEL_RELIABLE                          = 0;   // 0x00
+  DATA_CHANNEL_PARTIAL_RELIABLE_REXMIT           = 1;   // 0x01
+  DATA_CHANNEL_PARTIAL_RELIABLE_TIMED            = 2;   // 0x02
+  DATA_CHANNEL_RELIABLE_UNORDERED                = 128; // 0x80
+  DATA_CHANNEL_PARTIAL_RELIABLE_REXMIT_UNORDERED = 129; // 0x81
+  DATA_CHANNEL_PARTIAL_RELIABLE_TIMED_UNORDERED  = 130; // 0x82
+  DCEP_CHAN_SENTINEL                             = 256;
+}
+
+// ───────────────────────────────────────────────────────────────
+// Length-field wrappers
+//
+// These exist solely to carry the wire-format length prefix as an
+// optional, ignorable unit.  gRPC services that don't care about
+// wire fidelity read the top-level string field directly and leave
+// these unset.  A bridge serialising back to raw DCEP can either
+// honour the value here or recompute from the string.
+// ───────────────────────────────────────────────────────────────
+
+// Wraps the Label Length field (Section 5.1, 2 bytes unsigned)
+message LabelLength {
+  uint32 length = 1;
+}
+
+// Wraps the Protocol Length field (Section 5.1, 2 bytes unsigned)
+message ProtocolLength {
+  uint32 length = 1;
+}
+
+// ───────────────────────────────────────────────────────────────
+// Messages
+// ───────────────────────────────────────────────────────────────
+
+// Section 5.1 — DATA_CHANNEL_OPEN
+//
+//  0                   1                   2                   3
+//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |  Message Type |  Channel Type |            Priority           |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                    Reliability Parameter                      |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |         Label Length          |       Protocol Length          |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                       Label (variable)                        |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                      Protocol (variable)                      |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message DataChannelOpen {
+  // Wire: 1 byte — must be DATA_CHANNEL_OPEN (0x03)
+  DCEPMessageType message_type = 1;
+
+  // Wire: 1 byte — reliability / ordering mode
+  DCEPChannelType channel_type = 2;
+
+  // Wire: 2 bytes unsigned — data channel priority per RFC 8831.
+  // uint32 because proto3 offers no uint16; uint32 is the smallest
+  // unsigned integer type available and is therefore the closest
+  // semantically-equivalent encoding for any wire field ≤ 4 bytes.
+  uint32 priority = 3;
+
+  // Wire: 4 bytes unsigned
+  //   RELIABLE / RELIABLE_UNORDERED           → ignored (set to 0)
+  //   PARTIAL_RELIABLE_REXMIT{_UNORDERED}     → max retransmission count
+  //   PARTIAL_RELIABLE_TIMED{_UNORDERED}      → max lifetime in ms
+  uint32 reliability_parameter = 4;
+
+  // Wire: 2-byte length prefix for |label|.
+  // Optional — gRPC consumers can ignore this and read |label| directly.
+  LabelLength label_length = 5;
+
+  // Wire: 2-byte length prefix for |protocol|.
+  // Optional — gRPC consumers can ignore this and read |protocol| directly.
+  ProtocolLength protocol_length = 6;
+
+  // Wire: variable-length UTF-8, may be empty.
+  // The data that label_length.length describes on the wire.
+  string label = 7;
+
+  // Wire: variable-length UTF-8, empty ⇒ unspecified.
+  // Non-empty ⇒ value from WebSocket Subprotocol Name Registry [RFC 6455].
+  string protocol = 8;
+}
+
+// Section 5.2 — DATA_CHANNEL_ACK
+//
+//  0
+//  0 1 2 3 4 5 6 7
+// +-+-+-+-+-+-+-+-+
+// |  Message Type |
+// +-+-+-+-+-+-+-+-+
+//
+message DataChannelAck {
+  // Wire: 1 byte — must be DATA_CHANNEL_ACK (0x02)
+  DCEPMessageType message_type = 1;
+}
