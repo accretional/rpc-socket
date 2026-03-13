@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package webrtc;
+
+import "google/protobuf/any.proto"; 
+
+service SCTP {
+  rpc Stream(stream SCTPPacket) returns(google.protobuf.Any);
+}
