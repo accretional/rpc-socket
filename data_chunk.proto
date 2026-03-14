@@ -132,7 +132,7 @@ message DataChunk {
     bool _2 = 2;
     bool _3 = 3;
     bool _4 = 4;
-    bool _5 = 5;
+    bool immediate = 5;
     bool unordered = 6;
     bool beginning = 7;
     bool ending = 8;
