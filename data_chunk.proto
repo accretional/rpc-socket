@@ -111,30 +111,37 @@ message ChunkLength {
 // \                                                               \
 // +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //
-message DataChunk {
-  // Wire: 1 byte — must be SCTP_CHUNK_DATA (0)
-  SCTPChunkType chunk_type = 1;
 
+message DataChunk {
   // --- Chunk Flags byte: [Reserved(5)][U(1)][B(1)][E(1)] ---
 
   // Wire: 5 bits — reserved, set to all 0 on transmit, ignored on
   // receipt. Stored as raw bytes for wire round-trip fidelity; a
   // future RFC may assign meaning to these bits.
-  bytes reserved = 2;
 
   // Wire: 1 bit — (U)nordered. If true, this is an unordered DATA
   // chunk and the receiver MUST ignore stream_sequence_number.
-  bool unordered = 3;
 
   // Wire: 1 bit — (B)eginning fragment. If true, first fragment of
   // a user message.
-  bool beginning = 4;
 
   // Wire: 1 bit — (E)nding fragment. If true, last fragment of a
   // user message. beginning=true ending=true → unfragmented message.
-  bool ending = 5;
+  Message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool unordered = 6;
+    bool beginning = 7;
+    bool ending = 8;
+  }
+  
+  // Wire: 1 byte — must be SCTP_CHUNK_DATA (0)
+  SCTPChunkType chunk_type = 1;
 
-  // --- end flags byte ---
+  Flags flags = 2;
 
   // Wire: 2 bytes unsigned — total chunk size in bytes including header,
   // excluding trailing padding. Optional; gRPC consumers may ignore,
