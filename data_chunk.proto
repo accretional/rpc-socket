@@ -127,7 +127,7 @@ message DataChunk {
 
   // Wire: 1 bit — (E)nding fragment. If true, last fragment of a
   // user message. beginning=true ending=true → unfragmented message.
-  Message Flags {
+  message Flags {
     bool _1 = 1;
     bool _2 = 2;
     bool _3 = 3;
@@ -146,28 +146,28 @@ message DataChunk {
   // Wire: 2 bytes unsigned — total chunk size in bytes including header,
   // excluding trailing padding. Optional; gRPC consumers may ignore,
   // bridge serializers recompute from |user_data| as (16 + len(user_data)).
-  ChunkLength chunk_length = 6;
+  ChunkLength chunk_length = 3;
 
   // Wire: 4 bytes unsigned — Transmission Sequence Number.
   // Valid range 0 to 2^32-1, wraps to 0.
-  uint32 tsn = 7;
+  uint32 tsn = 4;
 
   // Wire: 2 bytes unsigned — identifies which stream the data belongs to.
   // uint32 because proto3 has no uint16.
-  uint32 stream_identifier = 8;
+  uint32 stream_identifier = 5;
 
   // Wire: 2 bytes unsigned — sequence number within the stream.
   // Valid range 0 to 65535. Ignored when unordered is true.
   // uint32 because proto3 has no uint16.
-  uint32 stream_sequence_number = 9;
+  uint32 stream_sequence_number = 6;
 
   // Wire: 4 bytes unsigned — application-level protocol identifier.
   // Opaque to SCTP; passed through without byte-order conversion.
   // Value 0 means unspecified.
-  uint32 payload_protocol_identifier = 10;
+  uint32 payload_protocol_identifier = 7;
 
   // Wire: variable length — the actual user payload.
   // On wire, sender pads to 4-byte boundary with zeros; padding is
   // NOT included in chunk_length. Here it is the raw unpadded payload.
-  bytes user_data = 11;
+  bytes user_data = 8;
 }
