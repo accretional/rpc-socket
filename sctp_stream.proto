@@ -2,8 +2,22 @@ syntax = "proto3";
 
 package webrtc;
 
-import "google/protobuf/any.proto"; 
+import "google/protobuf/any.proto";
+
+message BinaryChunk {}
+
+message ProtoPacket{
+  repeated SCTPPacket payload = 1;
+}
 
 service SCTP {
-  rpc Stream(stream SCTPPacket) returns(google.protobuf.Any);
+  rpc StreamFromRaw(stream BinaryChunk) returns (stream SCTPPacket);
+  
+  rpc StreamFromProto(stream SCTPPacket) returns (stream google.protobuf.Any);
+  
+  rpc ProtoStream(stream google.protobuf.Any) returns(stream google.protobuf.Any);
+
+  rpc StreamToProto(stream google.protobuf.Any) returns(stream SCTPPacket);
+
+  rpc StreamToRaw(stream SCTPPacket) returns (stream BinaryChunk);
 }
