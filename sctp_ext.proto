@@ -1,0 +1,477 @@
+// sctp_ext.proto
+syntax = "proto3";
+
+package webrtc;
+
+import "sctp.proto";
+
+// SCTP Extension Chunk Types
+// RFC 4895 (AUTH), RFC 8260 (I-DATA, I-FORWARD-TSN),
+// RFC 3758 (FORWARD TSN), RFC 6525 (RE-CONFIG),
+// RFC 5061 (ASCONF, ASCONF-ACK), RFC 4820 (PAD)
+//
+// Same encoding conventions as sctp.proto and dcep.proto.
+
+// ═══════════════════════════════════════════════════════════════
+// Additional enums
+// ═══════════════════════════════════════════════════════════════
+
+// RFC 4895 §3.3, Table 2
+// Wire: 2 bytes unsigned
+enum HMACIdentifier {
+  _HMAC_RESERVED_0  = 0;
+  HMAC_SHA_1        = 1;
+  _HMAC_RESERVED_2  = 2;
+  HMAC_SHA_256      = 3;
+  HMAC_ID_SENTINEL  = 65536;
+}
+
+// RFC 6525 §4.4
+// Wire: 4 bytes unsigned
+enum ReconfigResult {
+  RECONFIG_SUCCESS                             = 0;
+  RECONFIG_SUCCESS_PERFORMED                   = 1;
+  RECONFIG_DENIED                              = 2;
+  RECONFIG_ERROR_WRONG_SSN                     = 3;
+  RECONFIG_ERROR_REQUEST_ALREADY_IN_PROGRESS   = 4;
+  RECONFIG_ERROR_BAD_SEQUENCE_NUMBER           = 5;
+  RECONFIG_ERROR_IN_PROGRESS                   = 6;
+  RECONFIG_RESULT_SENTINEL                     = 65536;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Additional INIT/INIT-ACK parameters
+// ═══════════════════════════════════════════════════════════════
+
+// RFC 4895 §3.1 — Random (0x8002)
+message RandomParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  // Wire: variable — 32 bytes recommended.
+  bytes random_number = 3;
+}
+
+// RFC 4895 §3.2 — Chunk List (0x8003)
+message ChunkListParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  // Wire: repeated 1-byte chunk type values. Max 260 bytes.
+  // uint32 because proto3 has no uint8.
+  repeated uint32 chunk_types = 3;
+}
+
+// RFC 4895 §3.3 — Requested HMAC Algorithm (0x8004)
+message HMACAlgoParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  // Wire: repeated 2-byte HMAC identifiers, preference-ordered.
+  repeated HMACIdentifier hmac_identifiers = 3;
+}
+
+// RFC 5061 §4.2.7 — Supported Extensions (0x8008)
+message SupportedExtensionsParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  // Wire: repeated 1-byte chunk type values.
+  repeated uint32 chunk_types = 3;
+}
+
+// RFC 3758 §3.1 — Forward-TSN-Supported (0xC000)
+// No value; presence signals PR-SCTP support.
+message ForwardTSNSupportedParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+}
+
+// RFC 5061 §4.2.1 — Add IP Address (0xC001)
+message AddIPAddressParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 asconf_request_correlation_id = 3;
+  bytes address_parameter = 4;
+}
+
+// RFC 5061 §4.2.2 — Delete IP Address (0xC002)
+message DeleteIPAddressParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 asconf_request_correlation_id = 3;
+  bytes address_parameter = 4;
+}
+
+// RFC 5061 §4.2.3 — Error Cause Indication (0xC003)
+message ErrorCauseIndicationParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 asconf_request_correlation_id = 3;
+  bytes error_causes = 4;
+}
+
+// RFC 5061 §4.2.4 — Set Primary Address (0xC004)
+message SetPrimaryAddressParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 asconf_request_correlation_id = 3;
+  bytes address_parameter = 4;
+}
+
+// RFC 5061 §4.2.5 — Success Indication (0xC005)
+message SuccessIndicationParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 asconf_request_correlation_id = 3;
+}
+
+// RFC 5061 §4.2.6 — Adaptation Layer Indication (0xC006)
+message AdaptationLayerIndicationParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 adaptation_indication = 3;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RFC 6525 RE-CONFIG parameters (Types 13–18)
+// ═══════════════════════════════════════════════════════════════
+
+// §4.1 — Outgoing SSN Reset Request (Type 13)
+message OutgoingSSNResetRequestParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 reconfig_request_sequence_number = 3;
+  uint32 reconfig_response_sequence_number = 4;
+  uint32 senders_last_assigned_tsn = 5;
+  // Wire: repeated 2-byte stream numbers. Empty = all streams.
+  repeated uint32 stream_numbers = 6;
+}
+
+// §4.2 — Incoming SSN Reset Request (Type 14)
+message IncomingSSNResetRequestParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 reconfig_request_sequence_number = 3;
+  repeated uint32 stream_numbers = 4;
+}
+
+// §4.3 — SSN/TSN Reset Request (Type 15)
+message SSNTSNResetRequestParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 reconfig_request_sequence_number = 3;
+}
+
+// §4.4 — Re-configuration Response (Type 16)
+message ReconfigResponseParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 reconfig_response_sequence_number = 3;
+  ReconfigResult result = 4;
+  // Wire: 4 bytes unsigned — optional, only in SSN/TSN reset response.
+  uint32 senders_next_tsn = 5;
+  uint32 receivers_next_tsn = 6;
+}
+
+// §4.5 — Add Outgoing Streams Request (Type 17)
+message AddOutgoingStreamsRequestParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 reconfig_request_sequence_number = 3;
+  uint32 number_of_new_streams = 4;
+  bytes reserved = 5;
+}
+
+// §4.6 — Add Incoming Streams Request (Type 18)
+message AddIncomingStreamsRequestParameter {
+  SCTPParameterType parameter_type = 1;
+  ParameterLength parameter_length = 2;
+  uint32 reconfig_request_sequence_number = 3;
+  uint32 number_of_new_streams = 4;
+  bytes reserved = 5;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Extension chunk messages
+// ═══════════════════════════════════════════════════════════════
+
+// ───────────────────────────────────────────────────────────────
+// RFC 4895 §5.1 — Authentication Chunk (AUTH) (15)
+// Flags: all reserved.
+//
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// | Type = 0x0F   |   Flags = 0   |          Length               |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |    Shared Key Identifier      |      HMAC Identifier          |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                             HMAC                             /
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message AuthChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  // Wire: 2 bytes unsigned.
+  uint32 shared_key_identifier = 4;
+  // Wire: 2 bytes unsigned.
+  HMACIdentifier hmac_identifier = 5;
+  // Wire: variable — HMAC result (20 bytes SHA-1, 32 bytes SHA-256).
+  bytes hmac = 6;
+}
+
+// ───────────────────────────────────────────────────────────────
+// RFC 8260 §2.1 — I-DATA Chunk (64)
+// Flags: [Reserved(3)][I(1)][U(1)][B(1)][E(1)] + 1 reserved low bit
+//
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |   Type = 64   |  Flags        |          Length               |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                              TSN                              |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |        Stream Identifier      |         Reserved              |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                     Message Identifier (MID)                  |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                     PPID / FSN                                |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// \                          User Data                           /
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message IDataChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool immediate = 4;
+    bool unordered = 5;
+    bool beginning = 6;
+    bool ending = 7;
+    bool _8 = 8;
+  }
+
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  uint32 tsn = 4;
+  uint32 stream_identifier = 5;
+  // Wire: 2 bytes — reserved.
+  bytes reserved = 6;
+  // Wire: 4 bytes unsigned — Message Identifier. Same for all fragments
+  // of a user message. Two counters per stream: ordered and unordered.
+  uint32 message_id = 7;
+  // Wire: 4 bytes unsigned — if B bit set: PPID (opaque, byte order
+  // not converted by SCTP); if B bit not set: FSN (starts at 0,
+  // incremented by 1 per fragment).
+  uint32 ppid_or_fsn = 8;
+  bytes user_data = 9;
+}
+
+// ───────────────────────────────────────────────────────────────
+// RFC 3758 §3.2 — Forward Cumulative TSN (FORWARD TSN) (192)
+// Flags: all reserved.
+//
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |   Type = 192  |  Flags = 0x00 |       Length = Variable       |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                  New Cumulative TSN                           |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |       Stream-1                |   Stream Sequence-1           |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// /                              ...                              /
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message ForwardTSNStreamEntry {
+  uint32 stream = 1;
+  uint32 stream_sequence = 2;
+}
+
+message ForwardTSNChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  uint32 new_cumulative_tsn = 4;
+  repeated ForwardTSNStreamEntry stream_entries = 5;
+}
+
+// ───────────────────────────────────────────────────────────────
+// RFC 8260 §2.3.1 — I-FORWARD-TSN Chunk (194)
+// Flags: all reserved.
+//
+// Like FORWARD TSN but with MID instead of SSN, plus unordered flag.
+//
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |   Type = 194  |  Flags = 0x00 |       Length = Variable       |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                  New Cumulative TSN                           |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |       Stream            | Res |U|    Message Identifier       |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |              Message Identifier (cont.)                       |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message IForwardTSNStreamEntry {
+  uint32 stream = 1;
+  bytes reserved = 2;
+  bool unordered = 3;
+  uint32 message_id = 4;
+}
+
+message IForwardTSNChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  uint32 new_cumulative_tsn = 4;
+  repeated IForwardTSNStreamEntry stream_entries = 5;
+}
+
+// ───────────────────────────────────────────────────────────────
+// RFC 6525 §3 — Re-configuration Chunk (RE-CONFIG) (130)
+// Flags: all reserved.
+//
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |   Type = 130  |  Chunk Flags  |       Chunk Length            |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// \              Re-configuration Parameter(s) (1 or 2)          /
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message ReconfigChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  // At most 2 of these; not all combinations valid (see RFC 6525).
+  OutgoingSSNResetRequestParameter outgoing_ssn_reset = 4;
+  IncomingSSNResetRequestParameter incoming_ssn_reset = 5;
+  SSNTSNResetRequestParameter ssn_tsn_reset = 6;
+  ReconfigResponseParameter reconfig_response = 7;
+  AddOutgoingStreamsRequestParameter add_outgoing_streams = 8;
+  AddIncomingStreamsRequestParameter add_incoming_streams = 9;
+}
+
+// ───────────────────────────────────────────────────────────────
+// RFC 5061 §4.1 — ASCONF Chunk (193)
+// Flags: all reserved.
+//
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |   Type = 193  |  Chunk Flags  |       Chunk Length            |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                     Serial Number                            |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                   Address Parameter                          /
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// \              ASCONF Parameter(s)                             /
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message AsconfChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  uint32 serial_number = 4;
+  // Wire: variable — source address TLV.
+  bytes address_parameter = 5;
+  // Wire: variable — one or more ASCONF parameter TLVs.
+  repeated bytes asconf_parameters = 6;
+}
+
+// ───────────────────────────────────────────────────────────────
+// RFC 5061 §4.1 — ASCONF-ACK Chunk (128)
+// Flags: all reserved.
+//
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |   Type = 128  |  Chunk Flags  |       Chunk Length            |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                     Serial Number                            |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// \              ASCONF Parameter Response(s)                    /
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message AsconfAckChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  uint32 serial_number = 4;
+  repeated bytes asconf_response_parameters = 5;
+}
+
+// ───────────────────────────────────────────────────────────────
+// RFC 4820 §3 — Padding Chunk (PAD) (132)
+// Flags: all reserved.
+//
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |   Type = 132  |  Chunk Flags  |       Chunk Length            |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                           Padding Data                       /
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//
+message PadChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  bytes padding_data = 4;
+}
