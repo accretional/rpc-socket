@@ -1,3 +1,4 @@
+// sctp.proto
 syntax = "proto3";
 
 package webrtc;
@@ -12,15 +13,16 @@ package webrtc;
 //   Non-semantic fixed-length     → smallest uint that covers the wire
 //                                   width; proto3 has no uint8/uint16,
 //                                   so uint32 covers fields up to 4 bytes.
-//                                   Raw bit regions with no semantic
-//                                   members use bytes for round-trip
-//                                   fidelity.
-//   Semantic bit flags            → individual bools named after the
-//                                   flag's RFC label
+//   Flags bytes                   → nested Flags message with one bool
+//                                   per bit; reserved bits get _N names
+//                                   matching their field number (bit
+//                                   position); named bits get their RFC
+//                                   label. Field numbers 1–8 map to bit
+//                                   positions 7–0 (MSB first).
 //   Length / count framing fields → nested wrapper message so gRPC
 //                                   consumers may ignore them; bridge
 //                                   serializers recompute or honour
-//   Field numbering               → mirrors the RFC wire layout order
+//   Field numbering on the parent → mirrors the RFC wire layout order
 
 // ═══════════════════════════════════════════════════════════════
 // Enums
@@ -44,13 +46,21 @@ enum SCTPChunkType {
   SCTP_CHUNK_ECNE              = 12;
   SCTP_CHUNK_CWR               = 13;
   SCTP_CHUNK_SHUTDOWN_COMPLETE = 14;
+  SCTP_CHUNK_AUTH              = 15;  // RFC 4895
+  SCTP_CHUNK_I_DATA            = 64;  // RFC 8260
+  SCTP_CHUNK_ASCONF_ACK        = 128; // RFC 5061
+  SCTP_CHUNK_RE_CONFIG         = 130; // RFC 6525
+  SCTP_CHUNK_PAD               = 132; // RFC 4820
+  SCTP_CHUNK_FORWARD_TSN       = 192; // RFC 3758
+  SCTP_CHUNK_ASCONF            = 193; // RFC 5061
+  SCTP_CHUNK_I_FORWARD_TSN     = 194; // RFC 8260
   SCTP_CHUNK_TYPE_SENTINEL     = 256;
 }
 
 // Section 3.2.1 — Parameter Type
 // Wire: 2 bytes unsigned (0x0000–0xfffe), 0xffff reserved
 enum SCTPParameterType {
-  _SCTP_PARAM_0                    = 0;   // proto3 required zero
+  _SCTP_PARAM_0                    = 0;
   SCTP_PARAM_HEARTBEAT_INFO        = 1;
   SCTP_PARAM_IPV4_ADDRESS          = 5;
   SCTP_PARAM_IPV6_ADDRESS          = 6;
@@ -59,14 +69,32 @@ enum SCTPParameterType {
   SCTP_PARAM_COOKIE_PRESERVATIVE   = 9;
   SCTP_PARAM_HOST_NAME             = 11;
   SCTP_PARAM_SUPPORTED_ADDR_TYPES  = 12;
+  SCTP_PARAM_OUTGOING_SSN_RESET    = 13;  // RFC 6525
+  SCTP_PARAM_INCOMING_SSN_RESET    = 14;  // RFC 6525
+  SCTP_PARAM_SSN_TSN_RESET         = 15;  // RFC 6525
+  SCTP_PARAM_RECONFIG_RESPONSE     = 16;  // RFC 6525
+  SCTP_PARAM_ADD_OUTGOING_STREAMS  = 17;  // RFC 6525
+  SCTP_PARAM_ADD_INCOMING_STREAMS  = 18;  // RFC 6525
   SCTP_PARAM_ECN_CAPABLE           = 32768; // 0x8000
+  SCTP_PARAM_RANDOM                = 32770; // 0x8002, RFC 4895
+  SCTP_PARAM_CHUNK_LIST            = 32771; // 0x8003, RFC 4895
+  SCTP_PARAM_HMAC_ALGO             = 32772; // 0x8004, RFC 4895
+  SCTP_PARAM_PADDING               = 32773; // 0x8005, RFC 4820
+  SCTP_PARAM_SUPPORTED_EXTENSIONS  = 32776; // 0x8008, RFC 5061
+  SCTP_PARAM_FORWARD_TSN_SUPPORTED = 49152; // 0xC000, RFC 3758
+  SCTP_PARAM_ADD_IP_ADDRESS        = 49153; // 0xC001, RFC 5061
+  SCTP_PARAM_DELETE_IP_ADDRESS     = 49154; // 0xC002, RFC 5061
+  SCTP_PARAM_ERROR_CAUSE_INDICATION = 49155; // 0xC003, RFC 5061
+  SCTP_PARAM_SET_PRIMARY_ADDRESS   = 49156; // 0xC004, RFC 5061
+  SCTP_PARAM_SUCCESS_INDICATION    = 49157; // 0xC005, RFC 5061
+  SCTP_PARAM_ADAPTATION_LAYER_IND  = 49158; // 0xC006, RFC 5061
   SCTP_PARAM_TYPE_SENTINEL         = 65536;
 }
 
 // Section 3.3.10 — Error Cause Code
 // Wire: 2 bytes unsigned
 enum SCTPErrorCauseCode {
-  _SCTP_CAUSE_0                            = 0;  // proto3 required zero
+  _SCTP_CAUSE_0                            = 0;
   SCTP_CAUSE_INVALID_STREAM_ID             = 1;
   SCTP_CAUSE_MISSING_MANDATORY_PARAM       = 2;
   SCTP_CAUSE_STALE_COOKIE                  = 3;
@@ -80,6 +108,7 @@ enum SCTPErrorCauseCode {
   SCTP_CAUSE_RESTART_WITH_NEW_ADDRESSES    = 11;
   SCTP_CAUSE_USER_INITIATED_ABORT          = 12;
   SCTP_CAUSE_PROTOCOL_VIOLATION            = 13;
+  SCTP_CAUSE_UNSUPPORTED_HMAC_ID           = 261; // 0x0105, RFC 4895
   SCTP_CAUSE_CODE_SENTINEL                 = 65536;
 }
 
@@ -88,21 +117,9 @@ enum SCTPErrorCauseCode {
 // ═══════════════════════════════════════════════════════════════
 
 // Section 3.1
-//
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |     Source Port Number        |     Destination Port Number   |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                      Verification Tag                         |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                           Checksum                            |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message SCTPCommonHeader {
   // Wire: 2 bytes unsigned. uint32 because proto3 has no uint16.
   uint32 source_port = 1;
-  // Wire: 2 bytes unsigned.
   uint32 destination_port = 2;
   // Wire: 4 bytes unsigned.
   uint32 verification_tag = 3;
@@ -112,38 +129,28 @@ message SCTPCommonHeader {
 
 // ═══════════════════════════════════════════════════════════════
 // Length / count wrappers
-//
-// Each wraps a single wire-format framing field so the whole
-// unit is optional/ignorable by gRPC consumers. Bridge
-// serializers can honour or recompute.
 // ═══════════════════════════════════════════════════════════════
 
-// Wire: 2 bytes — chunk total size including header, excluding padding.
 message ChunkLength {
   uint32 length = 1;
 }
 
-// Wire: 2 bytes — TLV parameter total size including type and length.
 message ParameterLength {
   uint32 length = 1;
 }
 
-// Wire: 2 bytes — error cause total size including code and length.
 message CauseLength {
   uint32 length = 1;
 }
 
-// Wire: 2 bytes — number of Gap Ack Blocks in a SACK.
 message NumberOfGapAckBlocks {
   uint32 count = 1;
 }
 
-// Wire: 2 bytes — number of Duplicate TSNs in a SACK.
 message NumberOfDuplicateTSNs {
   uint32 count = 1;
 }
 
-// Wire: 4 bytes — number of missing mandatory params in error cause 2.
 message NumberOfMissingParams {
   uint32 count = 1;
 }
@@ -152,286 +159,168 @@ message NumberOfMissingParams {
 // Sub-structures
 // ═══════════════════════════════════════════════════════════════
 
-// SACK Gap Ack Block (Section 3.3.4)
-// Each is a pair of 16-bit offsets from the Cumulative TSN Ack.
 message GapAckBlock {
-  // Wire: 2 bytes unsigned — start offset. uint32 because no uint16.
   uint32 start = 1;
-  // Wire: 2 bytes unsigned — end offset (inclusive).
   uint32 end = 2;
 }
 
+// Fully-reserved flags byte. Used by most chunks.
+// Field numbers 1–8 → bit positions 7–0.
+message Flags {
+  bool _1 = 1;
+  bool _2 = 2;
+  bool _3 = 3;
+  bool _4 = 4;
+  bool _5 = 5;
+  bool _6 = 6;
+  bool _7 = 7;
+  bool _8 = 8;
+}
+
 // ═══════════════════════════════════════════════════════════════
-// TLV Parameter messages (Section 3.2.1, 3.3.2.1, 3.3.3.1)
-//
-// Each parameter follows the wire layout:
-//   ParameterType | ParameterLength | Value
-// The type field is present for round-trip fidelity; in proto the
-// field name already identifies which parameter it is. The length
-// wrapper is optional/ignorable as with ChunkLength.
+// TLV Parameter messages
 // ═══════════════════════════════════════════════════════════════
 
-// Section 3.3.2.1 — IPv4 Address Parameter (Type 5)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |        Type = 5               |      Length = 8               |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                        IPv4 Address                           |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message IPv4AddressParameter {
   SCTPParameterType parameter_type = 1;
   ParameterLength parameter_length = 2;
-  // Wire: 4 bytes — binary-encoded IPv4 address.
   bytes ipv4_address = 3;
 }
 
-// Section 3.3.2.1 — IPv6 Address Parameter (Type 6)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |            Type = 6           |          Length = 20          |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                         IPv6 Address                          |
-// |                       (16 bytes)                              |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message IPv6AddressParameter {
   SCTPParameterType parameter_type = 1;
   ParameterLength parameter_length = 2;
-  // Wire: 16 bytes — binary-encoded IPv6 address.
   bytes ipv6_address = 3;
 }
 
-// Section 3.3.2.1 — Cookie Preservative (Type 9)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |          Type = 9             |          Length = 8           |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |         Suggested Cookie Life-Span Increment (msec.)          |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message CookiePreservativeParameter {
   SCTPParameterType parameter_type = 1;
   ParameterLength parameter_length = 2;
-  // Wire: 4 bytes unsigned — increment in milliseconds.
   uint32 suggested_cookie_life_span_increment = 3;
 }
 
-// Section 3.3.2.1 — Host Name Address (Type 11)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |          Type = 11            |          Length               |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// /                          Host Name                            /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message HostNameParameter {
   SCTPParameterType parameter_type = 1;
   ParameterLength parameter_length = 2;
-  // Wire: variable — null-terminated host name per RFC 1123 §2.1.
   string host_name = 3;
 }
 
-// Section 3.3.2.1 — Supported Address Types (Type 12)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |          Type = 12            |          Length               |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |        Address Type #1        |        Address Type #2        |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message SupportedAddressTypesParameter {
   SCTPParameterType parameter_type = 1;
   ParameterLength parameter_length = 2;
-  // Wire: repeated 2-byte unsigned values (5=IPv4, 6=IPv6, 11=Host Name).
-  // uint32 because proto3 has no uint16.
   repeated uint32 address_types = 3;
 }
 
-// Appendix A — ECN Capable (Type 0x8000)
-// No value; presence alone signals ECN support.
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Parameter Type = 32768      |     Parameter Length = 4      |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message ECNCapableParameter {
   SCTPParameterType parameter_type = 1;
   ParameterLength parameter_length = 2;
 }
 
-// Section 3.3.3.1 — State Cookie (Type 7)
-//
 message StateCookieParameter {
   SCTPParameterType parameter_type = 1;
   ParameterLength parameter_length = 2;
-  // Wire: variable — opaque cookie including MAC. Content is
-  // implementation-specific per Section 5.1.3.
   bytes cookie = 3;
 }
 
-// Section 3.3.3.1 — Unrecognized Parameter (Type 8)
-//
 message UnrecognizedParameter {
   SCTPParameterType parameter_type = 1;
   ParameterLength parameter_length = 2;
-  // Wire: variable — complete copy of the unrecognized TLV(s).
   bytes unrecognized_parameters = 3;
 }
 
-// Section 3.3.5 — Heartbeat Info (Type 1)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |    Heartbeat Info Type=1      |         HB Info Length        |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// /                  Sender-Specific Heartbeat Info               /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message HeartbeatInfoParameter {
   SCTPParameterType parameter_type = 1;
   ParameterLength parameter_length = 2;
-  // Wire: variable — opaque, understood only by the sender.
-  // Should include current time and destination address (Section 8.3).
-  // When used for path verification, MUST contain a 64-bit random nonce.
   bytes sender_specific_heartbeat_info = 3;
 }
 
 // ═══════════════════════════════════════════════════════════════
 // Error Cause messages (Section 3.3.10)
-//
-// Wire layout:
-//   CauseCode (2 bytes) | CauseLength (2 bytes) | Info (variable)
 // ═══════════════════════════════════════════════════════════════
 
-// Section 3.3.10.1 — Invalid Stream Identifier (Cause 1)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |     Cause Code=1              |      Cause Length=8           |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |        Stream Identifier      |         (Reserved)            |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message InvalidStreamIdentifierCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: 2 bytes unsigned — the invalid stream id.
   uint32 stream_identifier = 3;
-  // Wire: 2 bytes — reserved, set to 0 on transmit, ignored on receipt.
   bytes reserved = 4;
 }
 
-// Section 3.3.10.2 — Missing Mandatory Parameter (Cause 2)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |     Cause Code=2              |      Cause Length=8+N*2       |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                   Number of missing params=N                  |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Missing Param Type #1       |   Missing Param Type #2       |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message MissingMandatoryParameterCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: 4 bytes unsigned — count of missing parameter types.
   NumberOfMissingParams number_of_missing_params = 3;
-  // Wire: repeated 2-byte unsigned parameter type values.
   repeated uint32 missing_param_types = 4;
 }
 
-// Section 3.3.10.3 — Stale Cookie Error (Cause 3)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |     Cause Code=3              |       Cause Length=8          |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                 Measure of Staleness (usec.)                  |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
 message StaleCookieCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: 4 bytes unsigned — microseconds past expiration. 0 = not reported.
   uint32 measure_of_staleness = 3;
 }
 
-// Section 3.3.10.4 — Out of Resource (Cause 4)
-// No cause-specific information.
 message OutOfResourceCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
 }
 
-// Section 3.3.10.5 — Unresolvable Address (Cause 5)
 message UnresolvableAddressCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: variable — complete TLV of the unresolvable address parameter.
   bytes unresolvable_address = 3;
 }
 
-// Section 3.3.10.6 — Unrecognized Chunk Type (Cause 6)
 message UnrecognizedChunkTypeCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: variable — complete chunk (Type, Flags, Length, Value).
   bytes unrecognized_chunk = 3;
 }
 
-// Section 3.3.10.7 — Invalid Mandatory Parameter (Cause 7)
-// No cause-specific information.
 message InvalidMandatoryParameterCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
 }
 
-// Section 3.3.10.8 — Unrecognized Parameters (Cause 8)
 message UnrecognizedParametersCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: variable — complete TLV(s) of unrecognized parameters.
   bytes unrecognized_parameters = 3;
 }
 
-// Section 3.3.10.9 — No User Data (Cause 9)
 message NoUserDataCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: 4 bytes unsigned — TSN of the DATA chunk with no user data.
   uint32 tsn = 3;
 }
 
-// Section 3.3.10.10 — Cookie Received While Shutting Down (Cause 10)
-// No cause-specific information.
 message CookieWhileShuttingDownCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
 }
 
-// Section 3.3.10.11 — Restart with New Addresses (Cause 11)
 message RestartWithNewAddressesCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: variable — one or more new address TLVs copied from the INIT.
   bytes new_address_tlvs = 3;
 }
 
-// Section 3.3.10.12 — User-Initiated Abort (Cause 12)
 message UserInitiatedAbortCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: variable — upper layer abort reason, opaque to SCTP.
   bytes upper_layer_abort_reason = 3;
 }
 
-// Section 3.3.10.13 — Protocol Violation (Cause 13)
 message ProtocolViolationCause {
   SCTPErrorCauseCode cause_code = 1;
   CauseLength cause_length = 2;
-  // Wire: variable — optional additional info about the violation.
   bytes additional_information = 3;
 }
 
-// Union type for any error cause, used in ERROR and ABORT chunks.
+message UnsupportedHMACIdentifierCause {
+  SCTPErrorCauseCode cause_code = 1;
+  CauseLength cause_length = 2;
+  uint32 hmac_identifier = 3;
+}
+
 message ErrorCause {
   oneof cause {
     InvalidStreamIdentifierCause    invalid_stream_id          = 1;
@@ -447,128 +336,94 @@ message ErrorCause {
     RestartWithNewAddressesCause    restart_with_new_addresses = 11;
     UserInitiatedAbortCause         user_initiated_abort       = 12;
     ProtocolViolationCause          protocol_violation         = 13;
+    UnsupportedHMACIdentifierCause  unsupported_hmac_id        = 14;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Chunk messages
+// Chunk messages — RFC 4960 base + Appendix A (ECNE, CWR)
 // ═══════════════════════════════════════════════════════════════
 
-// ───────────────────────────────────────────────────────────────
 // Section 3.3.1 — Payload Data (DATA) (0)
 //
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 0    | Reserved|U|B|E|    Length                     |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                              TSN                              |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |      Stream Identifier S      |   Stream Sequence Number n   |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                  Payload Protocol Identifier                  |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// \                 User Data (seq n of Stream S)                 /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
+// Flags byte: [Reserved(4)][I(1)][U(1)][B(1)][E(1)]
+// I bit from RFC 9260 IANA registry (0x08).
 message DataChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool immediate = 5;
+    bool unordered = 6;
+    bool beginning = 7;
+    bool ending = 8;
+  }
+
   SCTPChunkType chunk_type = 1;
-
-  // --- Chunk Flags byte: [Reserved(5)][U(1)][B(1)][E(1)] ---
-  // Wire: 5 bits — reserved, always 0. Preserved for round-trip fidelity.
-  bytes reserved = 2;
-  // Wire: 1 bit — (U)nordered. Receiver MUST ignore stream_sequence_number.
-  bool unordered = 3;
-  // Wire: 1 bit — (B)eginning fragment.
-  bool beginning = 4;
-  // Wire: 1 bit — (E)nding fragment. B+E = unfragmented message.
-  bool ending = 5;
-  // --- end flags byte ---
-
-  ChunkLength chunk_length = 6;
-  // Wire: 4 bytes unsigned — Transmission Sequence Number. Wraps at 2^32.
-  uint32 tsn = 7;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  uint32 tsn = 4;
   // Wire: 2 bytes unsigned. uint32 because proto3 has no uint16.
-  uint32 stream_identifier = 8;
+  uint32 stream_identifier = 5;
   // Wire: 2 bytes unsigned. Valid 0–65535. Ignored when unordered=true.
-  uint32 stream_sequence_number = 9;
-  // Wire: 4 bytes unsigned — opaque to SCTP, byte order NOT converted.
-  // Value 0 = unspecified.
-  uint32 payload_protocol_identifier = 10;
-  // Wire: variable — unpadded user payload.
-  bytes user_data = 11;
+  uint32 stream_sequence_number = 6;
+  // Wire: 4 bytes unsigned. Opaque to SCTP, byte order NOT converted.
+  uint32 payload_protocol_identifier = 7;
+  bytes user_data = 8;
 }
 
-// ───────────────────────────────────────────────────────────────
 // Section 3.3.2 — Initiation (INIT) (1)
-//
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 1    |  Chunk Flags  |      Chunk Length             |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                         Initiate Tag                          |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |           Advertised Receiver Window Credit (a_rwnd)          |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |  Number of Outbound Streams   |  Number of Inbound Streams   |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                          Initial TSN                          |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// \              Optional/Variable-Length Parameters              /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
+// Flags: all reserved.
 message InitChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
   SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all reserved, set to 0. Preserved for round-trip.
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
-
-  // --- Fixed parameters ---
-  // Wire: 4 bytes unsigned — must not be 0.
   uint32 initiate_tag = 4;
-  // Wire: 4 bytes unsigned — dedicated receive buffer space in bytes.
   uint32 a_rwnd = 5;
-  // Wire: 2 bytes unsigned — must not be 0. uint32 because no uint16.
   uint32 number_of_outbound_streams = 6;
-  // Wire: 2 bytes unsigned — must not be 0.
   uint32 number_of_inbound_streams = 7;
-  // Wire: 4 bytes unsigned — valid 0 to 2^32-1.
   uint32 initial_tsn = 8;
-
-  // --- Optional/Variable-Length Parameters (TLV, any order) ---
-  // May appear 0 or more times:
   repeated IPv4AddressParameter ipv4_addresses = 9;
   repeated IPv6AddressParameter ipv6_addresses = 10;
-  // May appear 0 or 1 time:
   CookiePreservativeParameter cookie_preservative = 11;
   ECNCapableParameter ecn_capable = 12;
   HostNameParameter host_name = 13;
   SupportedAddressTypesParameter supported_address_types = 14;
 }
 
-// ───────────────────────────────────────────────────────────────
 // Section 3.3.3 — Initiation Acknowledgement (INIT ACK) (2)
-//
-// Same fixed-field layout as INIT. Adds State Cookie (mandatory)
-// and Unrecognized Parameter (optional). Shares address parameters.
-//
+// Flags: all reserved.
 message InitAckChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
   SCTPChunkType chunk_type = 1;
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
-
-  // --- Fixed parameters (same semantics as INIT) ---
   uint32 initiate_tag = 4;
   uint32 a_rwnd = 5;
   uint32 number_of_outbound_streams = 6;
   uint32 number_of_inbound_streams = 7;
   uint32 initial_tsn = 8;
-
-  // --- Optional/Variable-Length Parameters ---
-  // Mandatory in INIT ACK:
   StateCookieParameter state_cookie = 9;
-  // Optional, 0 or more:
   repeated IPv4AddressParameter ipv4_addresses = 10;
   repeated IPv6AddressParameter ipv6_addresses = 11;
   UnrecognizedParameter unrecognized_parameter = 12;
@@ -576,248 +431,240 @@ message InitAckChunk {
   HostNameParameter host_name = 14;
 }
 
-// ───────────────────────────────────────────────────────────────
 // Section 3.3.4 — Selective Acknowledgement (SACK) (3)
-//
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 3    |Chunk  Flags   |      Chunk Length             |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                      Cumulative TSN Ack                       |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |          Advertised Receiver Window Credit (a_rwnd)           |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// | Number of Gap Ack Blocks = N  |  Number of Duplicate TSNs = X |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |  Gap Ack Block #1 Start       |   Gap Ack Block #1 End       |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// /                              ...                              /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                       Duplicate TSN 1                         |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// /                              ...                              /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
+// Flags: all reserved.
 message SackChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
   SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all 0.
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
-  // Wire: 4 bytes unsigned — last in-sequence TSN before a gap.
   uint32 cumulative_tsn_ack = 4;
-  // Wire: 4 bytes unsigned — receive buffer space in bytes.
   uint32 a_rwnd = 5;
-  // Wire: 2 bytes unsigned — count of gap ack blocks following.
   NumberOfGapAckBlocks number_of_gap_ack_blocks = 6;
-  // Wire: 2 bytes unsigned — count of duplicate TSNs following.
   NumberOfDuplicateTSNs number_of_duplicate_tsns = 7;
-  // Wire: N × 4 bytes — pairs of 16-bit offsets from cumulative_tsn_ack.
   repeated GapAckBlock gap_ack_blocks = 8;
-  // Wire: X × 4 bytes unsigned — TSNs received more than once.
   repeated uint32 duplicate_tsns = 9;
 }
 
-// ───────────────────────────────────────────────────────────────
 // Section 3.3.5 — Heartbeat Request (HEARTBEAT) (4)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 4    | Chunk  Flags  |      Heartbeat Length         |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// \            Heartbeat Information TLV (Variable-Length)        /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
+// Flags: all reserved.
 message HeartbeatChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
   SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all 0.
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
-  // Wire: Heartbeat Info TLV (Type=1).
   HeartbeatInfoParameter heartbeat_info = 4;
 }
 
-// ───────────────────────────────────────────────────────────────
 // Section 3.3.6 — Heartbeat Acknowledgement (HEARTBEAT ACK) (5)
-//
-// Same layout as HEARTBEAT. The Heartbeat Information TLV MUST
-// be copied unchanged from the received HEARTBEAT.
-//
+// Flags: all reserved.
 message HeartbeatAckChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
   SCTPChunkType chunk_type = 1;
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
-  // Wire: Heartbeat Info TLV — copied unchanged from the HEARTBEAT.
   HeartbeatInfoParameter heartbeat_info = 4;
 }
 
-// ───────────────────────────────────────────────────────────────
 // Section 3.3.7 — Abort Association (ABORT) (6)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 6    |Reserved     |T|           Length              |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// \                   zero or more Error Causes                   /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
+// Flags: [Reserved(7)][T(1)]
 message AbortChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool t_bit = 8;
+  }
+
   SCTPChunkType chunk_type = 1;
-
-  // --- Chunk Flags byte: [Reserved(7)][T(1)] ---
-  // Wire: 7 bits — reserved, always 0.
-  bytes reserved = 2;
-  // Wire: 1 bit — T bit. 0 = Verification Tag is the expected tag;
-  // 1 = Verification Tag is reflected (copied from received packet).
-  bool t_bit = 3;
-  // --- end flags byte ---
-
-  ChunkLength chunk_length = 4;
-  repeated ErrorCause error_causes = 5;
-}
-
-// ───────────────────────────────────────────────────────────────
-// Section 3.3.8 — Shutdown Association (SHUTDOWN) (7)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 7    | Chunk  Flags  |      Length = 8               |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                      Cumulative TSN Ack                       |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
-message ShutdownChunk {
-  SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all 0.
-  bytes chunk_flags = 2;
-  ChunkLength chunk_length = 3;
-  // Wire: 4 bytes unsigned — last in-sequence TSN received.
-  uint32 cumulative_tsn_ack = 4;
-}
-
-// ───────────────────────────────────────────────────────────────
-// Section 3.3.9 — Shutdown Acknowledgement (SHUTDOWN ACK) (8)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 8    |Chunk  Flags   |      Length = 4               |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
-message ShutdownAckChunk {
-  SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all 0.
-  bytes chunk_flags = 2;
-  ChunkLength chunk_length = 3;
-}
-
-// ───────────────────────────────────────────────────────────────
-// Section 3.3.10 — Operation Error (ERROR) (9)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 9    | Chunk  Flags  |           Length              |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// \                    one or more Error Causes                   /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
-message ErrorChunk {
-  SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all 0.
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
   repeated ErrorCause error_causes = 4;
 }
 
-// ───────────────────────────────────────────────────────────────
-// Section 3.3.11 — Cookie Echo (COOKIE ECHO) (10)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 10   |Chunk  Flags   |         Length                |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// /                     Cookie                                    /
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
-message CookieEchoChunk {
+// Section 3.3.8 — Shutdown Association (SHUTDOWN) (7)
+// Flags: all reserved.
+message ShutdownChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
   SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all 0.
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
-  // Wire: variable — exact cookie from the State Cookie parameter
-  // of the INIT ACK. Note: NOT a TLV; the State Cookie's Parameter
-  // Value becomes the Cookie Echo's Chunk Value directly.
+  uint32 cumulative_tsn_ack = 4;
+}
+
+// Section 3.3.9 — Shutdown Acknowledgement (SHUTDOWN ACK) (8)
+// Flags: all reserved.
+message ShutdownAckChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+}
+
+// Section 3.3.10 — Operation Error (ERROR) (9)
+// Flags: all reserved.
+message ErrorChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
+  repeated ErrorCause error_causes = 4;
+}
+
+// Section 3.3.11 — Cookie Echo (COOKIE ECHO) (10)
+// Flags: all reserved.
+message CookieEchoChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
   bytes cookie = 4;
 }
 
-// ───────────────────────────────────────────────────────────────
 // Section 3.3.12 — Cookie Acknowledgement (COOKIE ACK) (11)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 11   |Chunk  Flags   |     Length = 4                |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
+// Flags: all reserved.
 message CookieAckChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
   SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all 0.
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
 }
 
-// ───────────────────────────────────────────────────────────────
-// Section 3.3.13 — Shutdown Complete (SHUTDOWN COMPLETE) (14)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |   Type = 14   |Reserved     |T|      Length = 4               |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
-message ShutdownCompleteChunk {
-  SCTPChunkType chunk_type = 1;
-
-  // --- Chunk Flags byte: [Reserved(7)][T(1)] ---
-  bytes reserved = 2;
-  // Wire: 1 bit — T bit. Same semantics as ABORT T bit.
-  bool t_bit = 3;
-  // --- end flags byte ---
-
-  ChunkLength chunk_length = 4;
-}
-
-// ───────────────────────────────────────────────────────────────
-// Appendix A — ECNE (ECN Echo) (12)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// | Chunk Type=12 | Flags=00000000|    Chunk Length = 8           |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                      Lowest TSN Number                        |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
+// Appendix A — ECNE (12)
+// Flags: all reserved.
 message EcneChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
   SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all 0.
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
-  // Wire: 4 bytes unsigned — lowest TSN in the CE-marked IP datagram.
   uint32 lowest_tsn = 4;
 }
 
-// ───────────────────────────────────────────────────────────────
-// Appendix A — CWR (Congestion Window Reduced) (13)
-//
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// | Chunk Type=13 | Flags=00000000|    Chunk Length = 8           |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-// |                      Lowest TSN Number                        |
-// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//
+// Appendix A — CWR (13)
+// Flags: all reserved.
 message CwrChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool _8 = 8;
+  }
   SCTPChunkType chunk_type = 1;
-  // Wire: 1 byte — all 0.
-  bytes chunk_flags = 2;
+  Flags flags = 2;
   ChunkLength chunk_length = 3;
-  // Wire: 4 bytes unsigned — the TSN from the ECNE being acknowledged.
   uint32 lowest_tsn = 4;
+}
+
+// Section 3.3.13 — Shutdown Complete (SHUTDOWN COMPLETE) (14)
+// Flags: [Reserved(7)][T(1)]
+message ShutdownCompleteChunk {
+  message Flags {
+    bool _1 = 1;
+    bool _2 = 2;
+    bool _3 = 3;
+    bool _4 = 4;
+    bool _5 = 5;
+    bool _6 = 6;
+    bool _7 = 7;
+    bool t_bit = 8;
+  }
+
+  SCTPChunkType chunk_type = 1;
+  Flags flags = 2;
+  ChunkLength chunk_length = 3;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Top-level SCTP Packet (Section 3)
-//
-// An SCTP packet is a common header followed by one or more chunks.
-// INIT, INIT ACK, and SHUTDOWN COMPLETE MUST be the only chunk
-// in their packet. All others may be bundled up to the path MTU.
+// Top-level SCTP Packet
 // ═══════════════════════════════════════════════════════════════
 
 message SCTPChunk {
@@ -837,6 +684,14 @@ message SCTPChunk {
     EcneChunk              ecne              = 13;
     CwrChunk               cwr               = 14;
     ShutdownCompleteChunk  shutdown_complete  = 15;
+    AuthChunk              auth              = 16;
+    IDataChunk             i_data            = 17;
+    AsconfAckChunk         asconf_ack        = 18;
+    ReconfigChunk          reconfig          = 19;
+    PadChunk               pad               = 20;
+    ForwardTSNChunk        forward_tsn       = 21;
+    AsconfChunk            asconf            = 22;
+    IForwardTSNChunk       i_forward_tsn     = 23;
   }
 }
 
